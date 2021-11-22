@@ -40,7 +40,7 @@ class Repository:
     def __init__(self, connection_string: str):
         self.session = sessionmaker(bind=create_engine(connection_string))()
 
-    def add_user(self, user: User):
+    def add_or_update_user(self, user: User):
         self.session.merge(user)
         self.session.commit()
 
