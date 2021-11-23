@@ -1,5 +1,9 @@
 import os
+import sys
+import tty
+import termios
 from typing import Optional
+from time import sleep
 
 import bcrypt
 from repository import Repository, User
@@ -49,6 +53,17 @@ def check_password(password: str):
         raise PasswordException("Password must contain at least one digit")
 
 
+def read_raw_byte() -> bytes:
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        char = sys.stdin.buffer.read(1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    return char
+
+
 class Menu:
     def __init__(self, repo: Repository):
         self.repository: Repository = repo
@@ -61,57 +76,187 @@ class Menu:
             "show account": (self.show_account, "Show your own account"),
             "change permissions": (self.change_permissions, "Make someone an admin or not (only for admins)"),
             "help": (self.help, "Print this help message"),
-            "delete user": (self.delete_user, "Delete a given user (only for admins)"),
-            "delete my account": (self.delete_own_account, "Delete your own account"),
+            # "delete user": (self.delete_user, "Delete a given user (only for admins)"),
+            # "delete my account": (self.delete_own_account, "Delete your own account"),
             "get data": (self.get_data, "Get the secret data"),
-            "change data": (self.change_data, "Update the secret data"),
+            "set data": (self.change_data, "Update the secret data"),
             "exit": (lambda: (print(text_styles.yellow("Exit")), exit()), "Exit the program")
         }
 
+    def check_current_user(self, admin: bool = False, invert: bool = False) -> bool:
+        if self.current_user and invert:
+            print(
+                text_styles.red("You should"),
+                text_styles.bold(text_styles.red('not')),
+                text_styles.red("be logged in to execute this command")
+            )
+            return False
+        elif not self.current_user and not invert:
+            print(text_styles.red("You must log in at first to execute this command"))
+            return False
+        if self.current_user and not self.current_user.is_admin and admin:
+            print(text_styles.red("You must be an admin to execute this command"))
+            return False
+        return True
+
     def create_user(self):
-        pass
+        if not self.check_current_user(admin=True):
+            return
+        while True:
+            username = input("Input the username of the new user (it must be unique): ")
+            if self.repository.get_user_by_username(username):
+                print("Error: such user already exists")
+            else:
+                break
+        user = User(
+            username=username,
+            first_name=input("Input the first name of the new user (it must be unique): "),
+            last_name=input("Input the last name of the new user (it must be unique): "),
+            password_hash=None,
+            is_admin=bool(input("Should this user be an admin? [y/N] ") in ('y', 'Y'))
+        )
+        self.repository.add_or_update_user(user)
+        print(text_styles.green("User was successfully created"))
+
+    @staticmethod
+    def _input_password(invitation: str) -> bytes:
+        password = b''
+        print(invitation, end='', flush=True)
+        while True:
+            current_symbol = read_raw_byte()
+            if current_symbol in (b'\r', b'\n'):
+                break
+            elif current_symbol in (b'\x03', b'\x04'):
+                print('\r' + (' ' * len(invitation)) + (' ' * len(password)) + ' ')
+                raise KeyboardInterrupt
+            if current_symbol == b'\x7f':
+                password = password[:-1]
+            else:
+                password += current_symbol
+            print('\r' + invitation + ('*' * len(password)) + ' ', end=chr(8), flush=True)
+        print()
+        return password
+
+    def _input_new_password(self, invitation: str) -> bytes:
+        while True:
+            new_password = self._input_password(invitation)
+            try:
+                check_password(new_password.decode())
+                break
+            except PasswordException as ex:
+                print(text_styles.red(ex.args[0]))
+        return new_password
 
     def login(self):
-        pass
+        if not self.check_current_user(admin=False, invert=True):
+            return
+        username = input("Input your username: ")
+        try:
+            password = self._input_password("Input your password: ")
+        except KeyboardInterrupt:
+            return
+        user = self.repository.get_user_by_username(username)
+        if not user or (user.password_hash and not bcrypt.checkpw(password, user.password_hash.encode())):
+            sleep(1)
+            print(text_styles.red("Incorrect username or password"))
+            return
+        if not user.password_hash:
+            print(text_styles.bold(text_styles.yellow("Warning: your account does not have a password")))
+            try:
+                new_password = self._input_new_password("Input your new password: ")
+            except KeyboardInterrupt:
+                return
+            user.password_hash = bcrypt.hashpw(new_password, bcrypt.gensalt(14))
+            self.repository.add_or_update_user(user)
+            print(text_styles.green("Password was set successfully"))
+        self.current_user = user
+        print(text_styles.green("You logged in successfully"))
 
     def logout(self):
-        pass
+        if not self.check_current_user(admin=False):
+            return
+        self.current_user = None
+        print(text_styles.green("You logged out successfully"))
 
     def show_account(self):
-        pass
+        if not self.check_current_user(admin=False):
+            return
+        print(text_styles.yellow("Current user info:"))
+        print("Username:", text_styles.bold(self.current_user.username))
+        print("First name:", text_styles.bold(self.current_user.first_name))
+        print("Last name:", text_styles.bold(self.current_user.last_name))
+        print("Admin:", text_styles.bold(
+            (text_styles.green if self.current_user.is_admin else text_styles.red)(str(self.current_user.is_admin))
+        ))
 
     def change_permissions(self):
-        pass
+        if not self.check_current_user(admin=True):
+            return
+        while not (user := self.repository.get_user_by_username(input("Input the username of desired user: "))):
+            print(text_styles.red("User not found"))
+        if user.id == self.current_user.id:
+            print("You can not change your own permissions")
+            return
+        if user.is_admin:
+            print("This user is an administrator")
+            if input("Do you really want to take admin rights away from this user? [y/N] ") in ('y', 'Y'):
+                user.is_admin = False
+            else:
+                print(text_styles.yellow("Cancelled"))
+                return
+        else:
+            print("This user is not an administrator")
+            if input("Do you really want to grant admin rights to this user? [y/N] ") in ('y', 'Y'):
+                user.is_admin = True
+            else:
+                print(text_styles.yellow("Cancelled"))
+                return
+        self.repository.add_or_update_user(user)
+        print(text_styles.green("Rights changed successfully"))
 
     def help(self):
         print("List of all commands:")
         for command in self.commands:
             print(text_styles.bold(command), '-', self.commands[command][1])
 
-    def delete_user(self):
-        pass
-
-    def delete_own_account(self):
-        pass
+    # def delete_user(self):
+    #     pass
+    #
+    # def delete_own_account(self):
+    #     pass
 
     def get_data(self):
-        pass
+        if not self.check_current_user(admin=False):
+            return
+        print(self.secret_data)
 
     def change_data(self):
-        pass
+        if not self.check_current_user(admin=False):
+            return
+        self.secret_data = input("Set the new value of data: ")
+        print(text_styles.green("The value was set successfully"))
 
     def interface(self):
         while True:
-            command = input(">> ").strip()
-            if command in self.commands:
-                self.commands[command][0]()
-            else:
-                print(text_styles.red("Command not found!"))
-                self.help()
+            try:
+                command = input(">> ").strip()
+                if not command:
+                    continue
+                if command in self.commands:
+                    try:
+                        self.commands[command][0]()
+                    except KeyboardInterrupt:
+                        print(text_styles.yellow("\nCancelled"))
+                else:
+                    print(text_styles.red("Command not found!"))
+                    self.help()
+            except KeyboardInterrupt:
+                print()
+                pass
 
 
 if __name__ == "__main__":
     try:
         Menu(Repository(f"sqlite:///{os.path.abspath('./data.db')}")).interface()
-    except (KeyboardInterrupt, EOFError):
+    except EOFError:
         print(text_styles.yellow("\nExit"))

@@ -1,4 +1,5 @@
 from uuid import uuid4
+from typing import Optional
 
 from sqlalchemy import Column, String, Boolean, create_engine
 from sqlalchemy.orm import sessionmaker
@@ -14,7 +15,7 @@ Base = declarative_base()
 class User(Base):
     __tablename__ = "users"
 
-    def __init__(self, username: str, password_hash: str, is_admin: bool, first_name: str, last_name: str):
+    def __init__(self, username: str, is_admin: bool, first_name: str, last_name: str, password_hash: Optional[str] = None):
         super(User, self).__init__()
         self.username = username
         self.password_hash = password_hash
@@ -28,17 +29,19 @@ class User(Base):
     def __repr__(self):
         return f"User(first_name={self.first_name}, last_name={self.last_name}, username={self.username})"
 
-    id = Column(UUID(), nullable=False, primary_key=True, default=lambda: str(uuid4()))
+    id = Column(String(36), nullable=False, primary_key=True, default=lambda: str(uuid4()))
     username = Column(String(64), nullable=False)
-    password_hash = Column(String(256), nullable=False)
+    password_hash = Column(String(256), nullable=True)
     is_admin = Column(Boolean(), nullable=False)
-    first_name = Column(String(256), nullable=False)
+    first_name = Column(String(256), nullable=True)
     last_name = Column(String(256), nullable=True)
 
 
 class Repository:
     def __init__(self, connection_string: str):
-        self.session = sessionmaker(bind=create_engine(connection_string))()
+        engine = create_engine(connection_string)
+        self.session = sessionmaker(bind=engine)()
+        Base.metadata.create_all(engine)
 
     def add_or_update_user(self, user: User):
         self.session.merge(user)
