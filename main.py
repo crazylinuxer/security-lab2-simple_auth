@@ -70,14 +70,15 @@ class Menu:
         self.current_user: Optional[User] = None
         self.secret_data = "LINUX IS BETTER THAN WINDOWS"
         self.commands = {
-            "create user": (self.create_user, "Create a new user"),
+            "create user": (self.create_user, f"Create a new user {text_styles.yellow('(only for admins)')}"),
             "login": (self.login, "Log into an account"),
             "logout": (self.logout, "Log out of your account"),
             "show account": (self.show_account, "Show your own account"),
-            "change permissions": (self.change_permissions, "Make someone an admin or not (only for admins)"),
+            "change permissions": (self.change_permissions,
+                                   f"Make someone an admin or not {text_styles.yellow('(only for admins)')}"),
             "help": (self.help, "Print this help message"),
-            # "delete user": (self.delete_user, "Delete a given user (only for admins)"),
-            # "delete my account": (self.delete_own_account, "Delete your own account"),
+            # "delete user": (self.delete_user, f"Delete a given user {text_styles.yellow('(only for admins)')}"),
+            # "delete my account": (self.delete_own_account, f"Delete your own account"),
             "get data": (self.get_data, "Get the secret data"),
             "set data": (self.change_data, "Update the secret data"),
             "exit": (lambda: (print(text_styles.yellow("Exit")), exit()), "Exit the program")
@@ -215,9 +216,9 @@ class Menu:
         print(text_styles.green("Rights changed successfully"))
 
     def help(self):
-        print("List of all commands:")
+        print(text_styles.yellow("List of all commands:"))
         for command in self.commands:
-            print(text_styles.bold(command), '-', self.commands[command][1])
+            print(text_styles.bold(text_styles.cyan(command)), '-', self.commands[command][1])
 
     # def delete_user(self):
     #     pass
