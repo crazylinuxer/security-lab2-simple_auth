@@ -2,8 +2,9 @@ import os
 import sys
 import tty
 import termios
-from typing import Optional
 from time import sleep
+from typing import Optional, Set
+from datetime import datetime, timedelta
 
 import bcrypt
 from repository import Repository, User
@@ -18,7 +19,9 @@ class PasswordException(Exception):
     pass
 
 
-def check_password(password: str):
+def check_password(password: str, forbidden_passwords: Optional[Set[str]] = None):
+    if forbidden_passwords and password in forbidden_passwords:
+        raise PasswordException("Password is present in the dictionary")
     letters = bytes(range(b'a'[0], b'z'[0]+1)).decode()
     lower = False
     upper = False
@@ -69,6 +72,8 @@ class Menu:
         self.repository: Repository = repo
         self.current_user: Optional[User] = None
         self.secret_data = "LINUX IS BETTER THAN WINDOWS"
+        self.password_lifetime = timedelta(seconds=3600 * 24)  # 1 day
+        self._forbidden_passwords = self._read_forbidden_passwords()
         self.commands = {
             "create user": (self.create_user, f"Create a new user {text_styles.yellow('(only for admins)')}"),
             "login": (self.login, "Log into an account"),
@@ -77,12 +82,25 @@ class Menu:
             "change permissions": (self.change_permissions,
                                    f"Make someone an admin or not {text_styles.yellow('(only for admins)')}"),
             "help": (self.help, "Print this help message"),
-            # "delete user": (self.delete_user, f"Delete a given user {text_styles.yellow('(only for admins)')}"),
-            # "delete my account": (self.delete_own_account, f"Delete your own account"),
             "get data": (self.get_data, "Get the secret data"),
             "set data": (self.change_data, "Update the secret data"),
+            "set password life time": (
+                self.set_password_lifetime,
+                f"Set the time after which user will have to change a password {text_styles.yellow('(only for admins)')}"
+            ),
             "exit": (lambda: (print(text_styles.yellow("Exit")), exit()), "Exit the program")
         }
+
+    @staticmethod
+    def _read_forbidden_passwords() -> Set[str]:
+        result = set()
+        with open("./forbidden_passwords/rockyou_short.txt") as passwords:
+            result.update(line.strip(' \n') for line in passwords.readlines())
+        with open("./forbidden_passwords/names.txt") as names:
+            result.update(line.strip(' \n') for line in names.readlines())
+        with open("./forbidden_passwords/words.txt") as words:
+            result.update(line.strip(' \n').split()[0] for line in words.readlines())
+        return result
 
     def check_current_user(self, admin: bool = False, invert: bool = False) -> bool:
         if self.current_user and invert:
@@ -100,6 +118,17 @@ class Menu:
             return False
         return True
 
+    def set_password_lifetime(self):
+        if not self.check_current_user(admin=True):
+            return
+        while True:
+            time = input("Enter the time in seconds: ")
+            if time.isdecimal():
+                break
+            print(text_styles.red("Invalid value given"))
+        self.password_lifetime = timedelta(seconds=int(time))
+        print(text_styles.green("Value changed successfully"))
+
     def create_user(self):
         if not self.check_current_user(admin=True):
             return
@@ -113,7 +142,6 @@ class Menu:
             username=username,
             first_name=input("Input the first name of the new user (it must be unique): "),
             last_name=input("Input the last name of the new user (it must be unique): "),
-            password_hash=None,
             is_admin=bool(input("Should this user be an admin? [y/N] ") in ('y', 'Y'))
         )
         self.repository.add_or_update_user(user)
@@ -126,23 +154,27 @@ class Menu:
         while True:
             current_symbol = read_raw_byte()
             if current_symbol in (b'\r', b'\n'):
+                print()
                 break
             elif current_symbol in (b'\x03', b'\x04'):
-                print('\r' + (' ' * len(invitation)) + (' ' * len(password)) + ' ')
+                print('\r' + text_styles.grey(invitation) + (' ' * len(password)), end=' ')
                 raise KeyboardInterrupt
             if current_symbol == b'\x7f':
                 password = password[:-1]
             else:
                 password += current_symbol
             print('\r' + invitation + ('*' * len(password)) + ' ', end=chr(8), flush=True)
-        print()
         return password
 
-    def _input_new_password(self, invitation: str) -> bytes:
+    def _input_new_password(self, invitation1: str, invitation2: str, old_password: Optional[str] = None) -> bytes:
         while True:
-            new_password = self._input_password(invitation)
+            new_password = self._input_password(invitation1)
             try:
-                check_password(new_password.decode())
+                if old_password and old_password == new_password.decode():
+                    raise PasswordException("You can't use your old password")
+                check_password(new_password.decode(), self._forbidden_passwords)
+                if new_password != self._input_password(invitation2):
+                    raise PasswordException("The passwords you entered are different")
                 break
             except PasswordException as ex:
                 print(text_styles.red(ex.args[0]))
@@ -152,24 +184,27 @@ class Menu:
         if not self.check_current_user(admin=False, invert=True):
             return
         username = input("Input your username: ")
-        try:
-            password = self._input_password("Input your password: ")
-        except KeyboardInterrupt:
-            return
+        password = self._input_password("Input your password: ")
         user = self.repository.get_user_by_username(username)
-        if not user or (user.password_hash and not bcrypt.checkpw(password, user.password_hash.encode())):
-            sleep(1)
+        if not user or (user.password_hash and not bcrypt.checkpw(
+                password, user.password_hash.encode() if isinstance(user.password_hash, str) else user.password_hash
+        )):
+            sleep(2)
             print(text_styles.red("Incorrect username or password"))
             return
         if not user.password_hash:
             print(text_styles.bold(text_styles.yellow("Warning: your account does not have a password")))
-            try:
-                new_password = self._input_new_password("Input your new password: ")
-            except KeyboardInterrupt:
-                return
-            user.password_hash = bcrypt.hashpw(new_password, bcrypt.gensalt(14))
+            new_password = self._input_new_password("Input your new password: ", "Re-enter the password: ")
+            user.password_hash = bcrypt.hashpw(new_password, bcrypt.gensalt(13))
+            user.password_set = datetime.utcnow()
             self.repository.add_or_update_user(user)
             print(text_styles.green("Password was set successfully"))
+        elif not user.password_set or datetime.utcnow() - user.password_set > self.password_lifetime:
+            print(text_styles.yellow("Warning: your password is old and should be replaced with a new one"))
+            new_password = self._input_new_password("Input your new password: ", "Re-enter the password: ", password.decode())
+            user.password_hash = bcrypt.hashpw(new_password, bcrypt.gensalt(13))
+            user.password_set = datetime.utcnow()
+            self.repository.add_or_update_user(user)
         self.current_user = user
         print(text_styles.green("You logged in successfully"))
 
@@ -219,12 +254,6 @@ class Menu:
         print(text_styles.yellow("List of all commands:"))
         for command in self.commands:
             print(text_styles.bold(text_styles.cyan(command)), '-', self.commands[command][1])
-
-    # def delete_user(self):
-    #     pass
-    #
-    # def delete_own_account(self):
-    #     pass
 
     def get_data(self):
         if not self.check_current_user(admin=False):
