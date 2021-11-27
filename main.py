@@ -2,8 +2,10 @@ import os
 import sys
 import tty
 import termios
+from math import ceil
 from time import sleep
-from typing import Optional, Set
+from decimal import Decimal
+from typing import Optional, Set, AnyStr
 from datetime import datetime, timedelta
 
 import bcrypt
@@ -19,9 +21,11 @@ class PasswordException(Exception):
     pass
 
 
-def check_password(password: str, forbidden_passwords: Optional[Set[str]] = None):
+def check_password(password: str, forbidden_passwords: Optional[Set[str]] = None, min_length: Optional[int] = None):
     if forbidden_passwords and password in forbidden_passwords:
         raise PasswordException("Password is present in the dictionary")
+    if min_length and min_length > 0 and len(password) < min_length:
+        raise PasswordException("Password is too short")
     letters = bytes(range(b'a'[0], b'z'[0]+1)).decode()
     lower = False
     upper = False
@@ -56,6 +60,14 @@ def check_password(password: str, forbidden_passwords: Optional[Set[str]] = None
         raise PasswordException("Password must contain at least one digit")
 
 
+def is_float(element: AnyStr) -> bool:
+    try:
+        float(element)
+        return True
+    except ValueError:
+        return False
+
+
 def read_raw_byte() -> bytes:
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
@@ -74,6 +86,8 @@ class Menu:
         self.secret_data = "LINUX IS BETTER THAN WINDOWS"
         self.password_lifetime = timedelta(seconds=3600 * 24)  # 1 day
         self._forbidden_passwords = self._read_forbidden_passwords()
+        self.wrong_password_delay = 2
+        self.password_length = 8
         self.commands = {
             "create user": (self.create_user, f"Create a new user {text_styles.yellow('(only for admins)')}"),
             "login": (self.login, "Log into an account"),
@@ -88,6 +102,7 @@ class Menu:
                 self.set_password_lifetime,
                 f"Set the time after which user will have to change a password {text_styles.yellow('(only for admins)')}"
             ),
+            "get password strength": (self.get_password_strength, "Get an estimate of a password strength on a given config"),
             "exit": (lambda: (print(text_styles.yellow("Exit")), exit()), "Exit the program")
         }
 
@@ -117,6 +132,39 @@ class Menu:
             print(text_styles.red("You must be an admin to execute this command"))
             return False
         return True
+
+    def get_password_strength(self):
+        parameters = {
+            "L": self.password_length, "A": 88, "T": self.password_lifetime.total_seconds(),
+            "V": (60 / (self.wrong_password_delay + 0.5)) * 60
+        }
+        for parameter, full_name, checker, item_type in (
+                ("L", "password length", str.isdecimal, int), ("A", "alphabet length", str.isdecimal, int),
+                ("V", "brute-force speed (passwords per hour)", str.isdecimal, int),
+                ("T", "password life time (in seconds)", str.isdecimal, int),
+                ("desired_P", "desired P ((V*T)/S) to estimate S*", is_float, float)
+        ):
+            while True:
+                entered_parameter = input(
+                    f"Input the {text_styles.bold(full_name)}" +
+                    (f" {text_styles.yellow(f'(or just hit enter to use {parameters[parameter]})')}: " if
+                        parameters.get(parameter) else ': ')
+                )
+                if not entered_parameter and parameter in parameters:
+                    break
+                if checker(entered_parameter):
+                    parameters[parameter] = item_type(entered_parameter)
+                    break
+                print(text_styles.red("Invalid value"))
+        parameters["S"] = parameters["A"] ** parameters["L"]
+        parameters["P"] = Decimal((parameters["V"] * parameters["T"]) / parameters["S"])
+        if parameters["P"] > 1:
+            parameters["P"] = 1
+        print("S = A^L =\t", parameters["S"])
+        print("P = (V*T)/S =\t", f'{parameters["P"]:.32f}')
+        if parameters.get("desired_P"):
+            parameters["S*"] = ceil(parameters["V"] * parameters["T"] / parameters["desired_P"])
+            print("S* = [(V*T)/P] =", parameters["S*"])
 
     def set_password_lifetime(self):
         if not self.check_current_user(admin=True):
@@ -189,7 +237,7 @@ class Menu:
         if not user or (user.password_hash and not bcrypt.checkpw(
                 password, user.password_hash.encode() if isinstance(user.password_hash, str) else user.password_hash
         )):
-            sleep(2)
+            sleep(self.wrong_password_delay)
             print(text_styles.red("Incorrect username or password"))
             return
         if not user.password_hash:
@@ -200,7 +248,7 @@ class Menu:
             self.repository.add_or_update_user(user)
             print(text_styles.green("Password was set successfully"))
         elif not user.password_set or datetime.utcnow() - user.password_set > self.password_lifetime:
-            print(text_styles.yellow("Warning: your password is old and should be replaced with a new one"))
+            print(text_styles.yellow(text_styles.bold("Warning: your password is old and should be replaced with a new one")))
             new_password = self._input_new_password("Input your new password: ", "Re-enter the password: ", password.decode())
             user.password_hash = bcrypt.hashpw(new_password, bcrypt.gensalt(13))
             user.password_set = datetime.utcnow()
