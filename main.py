@@ -1,6 +1,7 @@
 import os
 import sys
 import tty
+import json
 import termios
 from math import ceil
 from time import sleep
@@ -12,9 +13,6 @@ import bcrypt
 from repository import Repository, User
 
 from utils import text_styles
-
-
-secret_data = "asdfasdfasdf"
 
 
 class PasswordException(Exception):
@@ -83,11 +81,12 @@ class Menu:
     def __init__(self, repo: Repository):
         self.repository: Repository = repo
         self.current_user: Optional[User] = None
-        self.secret_data = "LINUX IS BETTER THAN WINDOWS"
-        self.password_lifetime = timedelta(seconds=3600 * 24)  # 1 day
         self._forbidden_passwords = self._read_forbidden_passwords()
-        self.wrong_password_delay = 2
-        self.password_length = 8
+        self.wrong_password_delay = None
+        self.password_length = None
+        self.password_lifetime = None
+        self.secret_data = None
+        self._load_config()
         self.commands = {
             "create user": (self.create_user, f"Create a new user {text_styles.yellow('(only for admins)')}"),
             "login": (self.login, "Log into an account"),
@@ -116,6 +115,24 @@ class Menu:
         with open("./forbidden_passwords/words.txt") as words:
             result.update(line.strip(' \n').split()[0] for line in words.readlines())
         return result
+
+    def _load_config(self):
+        with open("./config.json") as conf_file:
+            config = json.load(conf_file)
+            self.wrong_password_delay = config["wrong_password_delay"]
+            self.password_length = config["password_length"]
+            self.password_lifetime = timedelta(seconds=config["password_lifetime"])
+            self.secret_data = config["secret_data"]
+
+    def _save_config(self):
+        config = {
+            "wrong_password_delay": self.wrong_password_delay,
+            "password_length": self.password_length,
+            "password_lifetime": self.password_lifetime.total_seconds(),
+            "secret_data": self.secret_data
+        }
+        with open("./config.json", 'w') as conf_file:
+            json.dump(config, conf_file)
 
     def check_current_user(self, admin: bool = False, invert: bool = False) -> bool:
         if self.current_user and invert:
@@ -331,6 +348,8 @@ class Menu:
             except KeyboardInterrupt:
                 print()
                 pass
+            finally:
+                self._save_config()
 
 
 if __name__ == "__main__":
