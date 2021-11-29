@@ -1,6 +1,6 @@
 {
-	"wrong_password_delay": 2,
-	"password_length": 8,
-	"password_lifetime": 86400,
-	"secret_data": "LINUX IS BETTER THAN WINDOWS"
+    "wrong_password_delay": 2,
+    "password_length": 8,
+    "password_lifetime": 86400.0,
+    "secret_data": "LINUX IS BETTER THAN WINDOWS!"
 }

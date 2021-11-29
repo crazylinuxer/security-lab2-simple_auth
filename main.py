@@ -132,7 +132,7 @@ class Menu:
             "secret_data": self.secret_data
         }
         with open("./config.json", 'w') as conf_file:
-            json.dump(config, conf_file)
+            json.dump(config, conf_file, indent=4)
 
     def check_current_user(self, admin: bool = False, invert: bool = False) -> bool:
         if self.current_user and invert:
