@@ -3,8 +3,8 @@ import sys
 import tty
 import json
 import termios
-from math import ceil
 from time import sleep
+from math import ceil, log
 from decimal import Decimal
 from typing import Optional, Set, AnyStr
 from datetime import datetime, timedelta
@@ -182,6 +182,15 @@ class Menu:
         if parameters.get("desired_P"):
             parameters["S*"] = ceil(parameters["V"] * parameters["T"] / parameters["desired_P"])
             print("S* = [(V*T)/P] =", parameters["S*"])
+        while True:
+            while True:
+                if not (desired_a := input("Input the alphabet length: ")) or \
+                        (desired_a.isdecimal() and (desired_a := int(desired_a)) > 1):
+                    break
+                print(text_styles.red("Invalid value was given"))
+            if not desired_a:
+                break
+            print(f"Passwords must be at least {ceil(log(parameters['S*'], desired_a))} symbols long on this alphabet")
 
     def set_password_lifetime(self):
         if not self.check_current_user(admin=True):
@@ -198,15 +207,15 @@ class Menu:
         if not self.check_current_user(admin=True):
             return
         while True:
-            username = input("Input the username of the new user (it must be unique): ")
+            username = input(f"Input the username of the new user {text_styles.yellow('(it must be unique)')}: ")
             if self.repository.get_user_by_username(username):
                 print("Error: such user already exists")
             else:
                 break
         user = User(
             username=username,
-            first_name=input("Input the first name of the new user (it must be unique): "),
-            last_name=input("Input the last name of the new user (it must be unique): "),
+            first_name=input("Input the first name of the new user: "),
+            last_name=input("Input the last name of the new user: "),
             is_admin=bool(input("Should this user be an admin? [y/N] ") in ('y', 'Y'))
         )
         self.repository.add_or_update_user(user)
